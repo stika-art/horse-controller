@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Horse 2D Controller</title>
+    <style>
+        body {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            font-family: Arial, sans-serif;
+            background-color: #222;
+            color: #eee;
+            overflow: hidden; /* Hide scrollbars */
+        }
+        button {
+            padding: 15px 30px;
+            font-size: 1.2em;
+            margin: 10px;
+            cursor: pointer;
+            background-color: #4CAF50; /* Green */
+            color: white;
+            border: none;
+            border-radius: 8px;
+            box-shadow: 0 4px #999;
+            transition: all 0.2s;
+        }
+        button:active {
+            background-color: #3e8e41;
+            box-shadow: 0 2px #666;
+            transform: translateY(2px);
+        }
+        #status {
+            margin-top: 20px;
+            font-size: 1.1em;
+        }
+        #debug-output {
+            margin-top: 20px;
+            font-size: 0.9em;
+            background-color: #333;
+            padding: 10px;
+            border-radius: 5px;
+            width: 90%;
+            max-height: 200px;
+            overflow-y: auto;
+            word-wrap: break-word;
+        }
+    </style>
+</head>
+<body>
+    <h1>Horse 2D Controller</h1>
+    <p id="status">Отключено. Введите IP-адрес ПК и порт сервера.</p>
+    <input type="text" id="ipAddressInput" placeholder="IP адрес ПК (например, 192.168.1.100)" value="192.168.1.XXX" style="padding: 10px; margin-bottom: 10px; width: 80%; max-width: 300px; font-size: 1em; border-radius: 5px; border: 1px solid #555; background-color: #444; color: #eee;">
+    <input type="number" id="portInput" placeholder="Порт (например, 8080)" value="8080" style="padding: 10px; margin-bottom: 10px; width: 80%; max-width: 300px; font-size: 1em; border-radius: 5px; border: 1px solid #555; background-color: #444; color: #eee;">
+    <button onclick="requestSensorPermissionAndConnect()">Подключиться к игре</button>
+    <div id="debug-output">
+        <p>X: <span id="accelX">0</span></p>
+        <p>Y: <span id="accelY">0</span></p>
+        <p>Z: <span id="accelZ">0</span></p>
+        <p>Сообщения: <span id="messages"></span></p>
+    </div>
+
+    <script>
+        let ws;
+        const statusElement = document.getElementById('status');
+        const accelXElement = document.getElementById('accelX');
+        const accelYElement = document.getElementById('accelY');
+        const accelZElement = document.getElementById('accelZ');
+        const messagesElement = document.getElementById('messages');
+
+        // --- Параметры для обнаружения прыжка по акселерометру ---
+        const JUMP_ACCEL_THRESHOLD = 8.0; // Порог ускорения по Y для прыжка. Потребуется настройка!
+                                          // Начните с 8.0-12.0. Чем больше, тем сильнее толчок нужен.
+        const JUMP_COOLDOWN_MS = 500;     // Кулдаун в миллисекундах, чтобы избежать многократных прыжков
+        let lastJumpTime = 0;
+        // ---------------------------------------------------------
+
+        function updateStatus(message, color = 'white') {
+            statusElement.textContent = message;
+            statusElement.style.color = color;
+        }
+
+        function requestSensorPermissionAndConnect() {
+            updateStatus("Запрашиваем разрешение на сенсоры...", "orange");
+
+            if (typeof DeviceMotionEvent.requestPermission === 'function') {
+                DeviceMotionEvent.requestPermission()
+                    .then(permissionState => {
+                        if (permissionState === 'granted') {
+                            updateStatus("Разрешение на сенсоры получено. Подключаемся...", "lightblue");
+                            setupDeviceMotionListener();
+                            connectWebSocket();
+                        } else {
+                            updateStatus("Разрешение на сенсоры не получено.", "red");
+                        }
+                    })
+                    .catch(error => {
+                        updateStatus(`Ошибка при запросе разрешения: ${error}`, "red");
+                        console.error(error);
+                    });
+            } else {
+                updateStatus("Разрешение на сенсоры не требуется. Подключаемся...", "lightblue");
+                setupDeviceMotionListener();
+                connectWebSocket();
+            }
+        }
+
+        function setupDeviceMotionListener() {
+            if (window.DeviceMotionEvent) {
+                window.addEventListener('devicemotion', (event) => {
+                    const acceleration = event.accelerationIncludingGravity;
+                    if (acceleration) {
+                        const x = acceleration.x;
+                        const y = acceleration.y;
+                        const z = acceleration.z;
+
+                        accelXElement.textContent = x.toFixed(2);
+                        accelYElement.textContent = y.toFixed(2);
+                        accelZElement.textContent = z.toFixed(2);
+
+                        // Отправка данных акселерометра
+                        if (ws && ws.readyState === WebSocket.OPEN) {
+                            ws.send(JSON.stringify({ type: "accel", x: x, y: y, z: z }));
+                        }
+
+                        // --- Логика обнаружения прыжка по Y-акселерометру ---
+                        const currentTime = Date.now();
+                        if (currentTime - lastJumpTime > JUMP_COOLDOWN_MS) {
+                            if (y > JUMP_ACCEL_THRESHOLD) {
+                                sendJumpCommand();
+                                lastJumpTime = currentTime;
+                                console.log("Jump detected! Y-accel:", y.toFixed(2));
+                            }
+                        }
+                        // ---------------------------------------------------
+                    }
+                }, true);
+                updateStatus("Слушатель акселерометра активен.", "lightgreen");
+            } else {
+                updateStatus("DeviceMotionEvent не поддерживается на этом устройстве.", "red");
+                console.log("DeviceMotionEvent не поддерживается на этом устройстве.");
+            }
+        }
+
+        function sendJumpCommand() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: "jump" })); // Отправляем команду прыжка
+            }
+        }
+
+        function connectWebSocket() {
+            const ipAddress = document.getElementById('ipAddressInput').value;
+            const port = document.getElementById('portInput').value;
+
+            if (!ipAddress || !port) {
+                updateStatus("Введите IP-адрес и порт.", "red");
+                return;
+            }
+
+            updateStatus(`Попытка подключения к ws://${ipAddress}:${port}...`, "orange");
+            try {
+                ws = new WebSocket(`ws://${ipAddress}:${port}`);
+
+                ws.onopen = () => {
+                    updateStatus("WebSocket подключен! Теперь управляйте телефоном.", "lightgreen");
+                    messagesElement.textContent = "";
+                };
+
+                ws.onmessage = (event) => {
+                    console.log("Сообщение от сервера:", event.data);
+                    messagesElement.textContent = event.data;
+                };
+
+                ws.onclose = () => {
+                    updateStatus("WebSocket отключен.", "red");
+                    messagesElement.textContent = "Соединение закрыто.";
+                    console.log("WebSocket отключен.");
+                };
+
+                ws.onerror = (error) => {
+                    updateStatus(`Ошибка WebSocket: ${error.message || error}.`, "red");
+                    messagesElement.textContent = `Ошибка: ${error.message || error}`;
+                    console.error("Ошибка WebSocket:", error);
+                };
+            } catch (e) {
+                updateStatus(`Не удалось создать WebSocket: ${e.message}`, "red");
+                console.error("WebSocket creation error:", e);
+            }
+        }
+    </script>
+</body>
+</html>
