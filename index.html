@@ -53,9 +53,7 @@
 </head>
 <body>
     <h1>Horse 2D Controller</h1>
-    <p id="status">Отключено. Введите IP-адрес ПК и порт сервера.</p>
-    <input type="text" id="ipAddressInput" placeholder="IP адрес ПК (например, 192.168.1.100)" value="192.168.1.XXX" style="padding: 10px; margin-bottom: 10px; width: 80%; max-width: 300px; font-size: 1em; border-radius: 5px; border: 1px solid #555; background-color: #444; color: #eee;">
-    <input type="number" id="portInput" placeholder="Порт (например, 8080)" value="8080" style="padding: 10px; margin-bottom: 10px; width: 80%; max-width: 300px; font-size: 1em; border-radius: 5px; border: 1px solid #555; background-color: #444; color: #eee;">
+    <p id="status">Отключено. Нажмите "Подключиться".</p>
     <button onclick="requestSensorPermissionAndConnect()">Подключиться к игре</button>
     <div id="debug-output">
         <p>X: <span id="accelX">0</span></p>
@@ -72,17 +70,26 @@
         const accelZElement = document.getElementById('accelZ');
         const messagesElement = document.getElementById('messages');
 
-        // --- Параметры для обнаружения прыжка по акселерометру ---
-        const JUMP_ACCEL_THRESHOLD = 8.0; // Порог ускорения по Y для прыжка. Потребуется настройка!
-                                          // Начните с 8.0-12.0. Чем больше, тем сильнее толчок нужен.
-        const JUMP_COOLDOWN_MS = 500;     // Кулдаун в миллисекундах, чтобы избежать многократных прыжков
+        // --- ВАЖНО: Замените этот URL на URL вашего Cloudflare Worker'а ---
+        // Например: https://unity-websocket-proxy.ВАШ_АККАУНТ.workers.dev/ws
+        const CLOUDFLARE_WORKER_URL = "https://unity-websocket-proxy.ВАШ_АККАУНТ.workers.dev/ws";
+        // ------------------------------------------------------------------
+
+        const JUMP_ACCEL_THRESHOLD = 8.0;
+        const JUMP_COOLDOWN_MS = 500;
         let lastJumpTime = 0;
-        // ---------------------------------------------------------
 
         function updateStatus(message, color = 'white') {
             statusElement.textContent = message;
             statusElement.style.color = color;
         }
+
+        // Автоматически пытаемся подключиться при загрузке страницы, или по нажатию
+        window.onload = function() {
+            // Можно сразу запустить запрос разрешений и подключение
+            // requestSensorPermissionAndConnect();
+            updateStatus("Готово к подключению. Нажмите 'Подключиться'.", "yellow");
+        };
 
         function requestSensorPermissionAndConnect() {
             updateStatus("Запрашиваем разрешение на сенсоры...", "orange");
@@ -122,12 +129,10 @@
                         accelYElement.textContent = y.toFixed(2);
                         accelZElement.textContent = z.toFixed(2);
 
-                        // Отправка данных акселерометра
                         if (ws && ws.readyState === WebSocket.OPEN) {
                             ws.send(JSON.stringify({ type: "accel", x: x, y: y, z: z }));
                         }
 
-                        // --- Логика обнаружения прыжка по Y-акселерометру ---
                         const currentTime = Date.now();
                         if (currentTime - lastJumpTime > JUMP_COOLDOWN_MS) {
                             if (y > JUMP_ACCEL_THRESHOLD) {
@@ -136,7 +141,6 @@
                                 console.log("Jump detected! Y-accel:", y.toFixed(2));
                             }
                         }
-                        // ---------------------------------------------------
                     }
                 }, true);
                 updateStatus("Слушатель акселерометра активен.", "lightgreen");
@@ -147,23 +151,23 @@
         }
 
         function sendJumpCommand() {
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ type: "jump" })); // Отправляем команду прыжка
+             if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: "jump" }));
             }
         }
 
         function connectWebSocket() {
-            const ipAddress = document.getElementById('ipAddressInput').value;
-            const port = document.getElementById('portInput').value;
+            // Подключаемся напрямую к Cloudflare Worker URL
+            const webSocketUrl = CLOUDFLARE_WORKER_URL;
 
-            if (!ipAddress || !port) {
-                updateStatus("Введите IP-адрес и порт.", "red");
+            if (!webSocketUrl) {
+                updateStatus("Ошибка: URL Cloudflare Worker не задан.", "red");
                 return;
             }
 
-            updateStatus(`Попытка подключения к ws://${ipAddress}:${port}...`, "orange");
+            updateStatus(`Попытка подключения к ${webSocketUrl}...`, "orange");
             try {
-                ws = new WebSocket(`ws://${ipAddress}:${port}`);
+                ws = new WebSocket(webSocketUrl); // Используем WSS:// для подключения к Worker'у
 
                 ws.onopen = () => {
                     updateStatus("WebSocket подключен! Теперь управляйте телефоном.", "lightgreen");
